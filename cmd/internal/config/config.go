@@ -34,7 +34,10 @@ func GetConfig() *Config {
 
 	cfg = &Config{}
 	if err := viper.ReadInConfig(); err == nil {
-		viper.Unmarshal(cfg)
+		if err := viper.Unmarshal(cfg); err != nil {
+			// Log error but continue with empty config
+			cfg = &Config{}
+		}
 	}
 
 	return cfg

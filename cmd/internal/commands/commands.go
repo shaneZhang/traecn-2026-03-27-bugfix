@@ -29,7 +29,10 @@ If no instance is provided, it will be prompted interactively.`,
 			if instance == "" && !interactive {
 				fmt.Print("Enter Mastodon instance URL (e.g., mastodon.social): ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read input: %w", err)
+				}
 				instance = strings.TrimSpace(input)
 			}
 
@@ -61,7 +64,10 @@ If no instance is provided, it will be prompted interactively.`,
 
 			fmt.Print("\nEnter the authorization code: ")
 			reader := bufio.NewReader(os.Stdin)
-			authCode, _ := reader.ReadString('\n')
+			authCode, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
 			authCode = strings.TrimSpace(authCode)
 
 			if authCode == "" {
@@ -135,7 +141,10 @@ func GetPostCommand() *cobra.Command {
 			} else {
 				fmt.Print("Enter your status: ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read input: %w", err)
+				}
 				status = strings.TrimSpace(input)
 			}
 
@@ -143,7 +152,7 @@ func GetPostCommand() *cobra.Command {
 				return fmt.Errorf("status cannot be empty")
 			}
 
-			s, err := client.PostStatus(status)
+			s, err := client.PostStatus(status, visibility)
 			if err != nil {
 				return fmt.Errorf("failed to post: %w", err)
 			}
@@ -619,7 +628,7 @@ func GetSearchCommand() *cobra.Command {
 			if len(result.Hashtags) > 0 {
 				fmt.Println("=== Hashtags ===")
 				for _, tag := range result.Hashtags {
-					fmt.Printf("#%s\n", tag)
+					fmt.Printf("#%s\n", tag.Name)
 				}
 			}
 
@@ -655,6 +664,9 @@ func GetAccountCommand() *cobra.Command {
 
 			if isID(usernameOrID) {
 				account, err = client.GetAccount(usernameOrID)
+				if err != nil {
+					return fmt.Errorf("failed to get account: %w", err)
+				}
 			} else {
 				acc, err := client.GetAccountByUsername(usernameOrID)
 				if err != nil {
@@ -664,10 +676,6 @@ func GetAccountCommand() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("failed to get account info: %w", err)
 				}
-			}
-
-			if err != nil {
-				return fmt.Errorf("failed to get account: %w", err)
 			}
 
 			fmt.Printf("Username: @%s\n", account.Username)
@@ -875,10 +883,15 @@ func stripHTML(s string) string {
 }
 
 func isID(s string) bool {
+	// Mastodon IDs are typically large numbers (Snowflake IDs)
+	// They are at least 18 digits long
+	if len(s) < 18 {
+		return false
+	}
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return false
 		}
 	}
-	return len(s) > 0
+	return true
 }
