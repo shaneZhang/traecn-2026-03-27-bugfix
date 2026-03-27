@@ -37,13 +37,14 @@ func main() {
 	rootCmd.AddCommand(commands.GetFollowersCommand())
 	rootCmd.AddCommand(commands.GetFollowingCommand())
 
+	// Check login status before executing command
+	cfg := api.GetConfig()
+	if cfg.InstanceURL != "" && cfg.AccessToken == "" {
+		fmt.Fprintln(os.Stderr, "Warning: Logged in but no access token. Please run login again.")
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-
-	cfg := api.GetConfig()
-	if cfg.InstanceURL != "" && cfg.AccessToken == "" {
-		fmt.Println("Warning: Logged in but no access token. Please run login again.")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"mastodon-cli/cmd/internal/config"
@@ -35,9 +36,19 @@ func (c *Client) SetAccessToken(accessToken string) {
 }
 
 func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
+	return c.doRequestWithVersion(method, endpoint, "v1", body)
+}
+
+func (c *Client) doRequestWithVersion(method, endpoint, apiVersion string, body interface{}) ([]byte, error) {
 	baseURL := c.instanceURL
 	if !hasScheme(baseURL) {
 		baseURL = "https://" + baseURL
+	}
+
+	// Parse the endpoint to separate path and query parameters
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid endpoint: %w", err)
 	}
 
 	parsedURL, err := url.Parse(baseURL)
@@ -45,7 +56,8 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 		return nil, fmt.Errorf("invalid instance URL: %w", err)
 	}
 
-	parsedURL.Path = "/api/v1/" + endpoint
+	parsedURL.Path = "/api/" + apiVersion + "/" + endpointURL.Path
+	parsedURL.RawQuery = endpointURL.RawQuery
 	apiURL := parsedURL.String()
 
 	var reqBody io.Reader
@@ -85,8 +97,8 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 	return respBody, nil
 }
 
-func hasScheme(url string) bool {
-	return len(url) >= 7 && (url[:7] == "http://" || url[:8] == "https://")
+func hasScheme(urlStr string) bool {
+	return (len(urlStr) >= 7 && urlStr[:7] == "http://") || (len(urlStr) >= 8 && urlStr[:8] == "https://")
 }
 
 type AppRegistration struct {
@@ -245,9 +257,12 @@ type Relationship struct {
 	FollowedBy bool   `json:"followed_by"`
 }
 
-func (c *Client) PostStatus(status string) (*Status, error) {
+func (c *Client) PostStatus(status, visibility string) (*Status, error) {
 	body := map[string]interface{}{
 		"status": status,
+	}
+	if visibility != "" {
+		body["visibility"] = visibility
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -264,7 +279,13 @@ func (c *Client) PostStatus(status string) (*Status, error) {
 }
 
 func (c *Client) GetAccountByUsername(username string) (*Account, error) {
-	respBody, err := c.doRequest("GET", "accounts/lookup?acct="+url.QueryEscape(username), nil)
+	// Remove leading @ if present
+	username = strings.TrimPrefix(username, "@")
+
+	// Use accounts/lookup API to find the account
+	// This API is available since Mastodon 3.0
+	endpoint := "accounts/lookup?acct=" + url.QueryEscape(username)
+	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -517,8 +538,8 @@ func (c *Client) UnboostStatus(statusID string) (*Status, error) {
 
 func (c *Client) PostReply(status, inReplyToID string) (*Status, error) {
 	body := map[string]interface{}{
-		"status":      status,
-		"in_reply_to": inReplyToID,
+		"status":         status,
+		"in_reply_to_id": inReplyToID,
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -543,18 +564,23 @@ func (c *Client) DeleteStatus(statusID string) error {
 	return nil
 }
 
+type Tag struct {
+	Name string `json:"name"`
+}
+
 type SearchResult struct {
 	Accounts []Account `json:"accounts"`
 	Statuses []Status  `json:"statuses"`
-	Hashtags []string  `json:"hashtags"`
+	Hashtags []Tag     `json:"hashtags"`
 }
 
 func (c *Client) Search(query string, limit int) (*SearchResult, error) {
+	// Use v2 search API which is the current standard
 	endpoint := "search?q=" + url.QueryEscape(query)
 	if limit > 0 {
 		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
 	}
-	respBody, err := c.doRequest("GET", endpoint, nil)
+	respBody, err := c.doRequestWithVersion("GET", endpoint, "v2", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +652,8 @@ func (c *Client) GetNotifications(limit int, notificationType string) ([]Notific
 			if limit > 0 {
 				endpoint += "&"
 			}
-			endpoint += "types=" + notificationType
+			// Mastodon API uses types[] array format for filtering
+			endpoint += "types[]=" + url.QueryEscape(notificationType)
 		}
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
