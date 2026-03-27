@@ -29,7 +29,10 @@ If no instance is provided, it will be prompted interactively.`,
 			if instance == "" && !interactive {
 				fmt.Print("Enter Mastodon instance URL (e.g., mastodon.social): ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read input: %w", err)
+				}
 				instance = strings.TrimSpace(input)
 			}
 
@@ -61,7 +64,10 @@ If no instance is provided, it will be prompted interactively.`,
 
 			fmt.Print("\nEnter the authorization code: ")
 			reader := bufio.NewReader(os.Stdin)
-			authCode, _ := reader.ReadString('\n')
+			authCode, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
 			authCode = strings.TrimSpace(authCode)
 
 			if authCode == "" {
@@ -73,7 +79,16 @@ If no instance is provided, it will be prompted interactively.`,
 				return fmt.Errorf("failed to login: %w", err)
 			}
 
-			if err := api.SaveLogin(instance, accessToken, app.ClientID, app.ClientSecret); err != nil {
+			// 标准化实例URL格式（保存时不带协议前缀，与读取时的处理保持一致）
+			normalizedInstance := instance
+			if strings.HasPrefix(normalizedInstance, "http://") {
+				normalizedInstance = strings.TrimPrefix(normalizedInstance, "http://")
+			} else if strings.HasPrefix(normalizedInstance, "https://") {
+				normalizedInstance = strings.TrimPrefix(normalizedInstance, "https://")
+			}
+			normalizedInstance = strings.TrimSuffix(normalizedInstance, "/")
+
+			if err := api.SaveLogin(normalizedInstance, accessToken, app.ClientID, app.ClientSecret); err != nil {
 				return fmt.Errorf("failed to save login: %w", err)
 			}
 
@@ -135,7 +150,10 @@ func GetPostCommand() *cobra.Command {
 			} else {
 				fmt.Print("Enter your status: ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read input: %w", err)
+				}
 				status = strings.TrimSpace(input)
 			}
 
@@ -143,7 +161,7 @@ func GetPostCommand() *cobra.Command {
 				return fmt.Errorf("status cannot be empty")
 			}
 
-			s, err := client.PostStatus(status)
+			s, err := client.PostStatus(status, visibility)
 			if err != nil {
 				return fmt.Errorf("failed to post: %w", err)
 			}
@@ -393,7 +411,7 @@ func GetFavouriteCommand() *cobra.Command {
 
 			statusID := args[0]
 
-			_, err := client.FavoriteStatus(statusID)
+			_, err := client.FavouriteStatus(statusID)
 			if err != nil {
 				return fmt.Errorf("failed to favourite status: %w", err)
 			}
@@ -424,7 +442,7 @@ func GetUnfavouriteCommand() *cobra.Command {
 
 			statusID := args[0]
 
-			_, err := client.UnfavoriteStatus(statusID)
+			_, err := client.UnfavouriteStatus(statusID)
 			if err != nil {
 				return fmt.Errorf("failed to unfavourite status: %w", err)
 			}
@@ -500,7 +518,7 @@ func GetUnboostCommand() *cobra.Command {
 }
 
 func GetReplyCommand() *cobra.Command {
-	var inReplyToID string
+	var visibility string
 
 	cmd := &cobra.Command{
 		Use:   "reply <status_id> <message>",
@@ -517,10 +535,10 @@ func GetReplyCommand() *cobra.Command {
 			client.SetInstanceURL(cfg.InstanceURL)
 			client.SetAccessToken(cfg.AccessToken)
 
-			inReplyToID = args[0]
+			inReplyToID := args[0]
 			status := strings.Join(args[1:], " ")
 
-			s, err := client.PostReply(status, inReplyToID)
+			s, err := client.PostReply(status, inReplyToID, visibility)
 			if err != nil {
 				return fmt.Errorf("failed to post reply: %w", err)
 			}
@@ -530,6 +548,8 @@ func GetReplyCommand() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&visibility, "visibility", "v", "", "Post visibility (public, unlisted, private, direct)")
 
 	return cmd
 }
@@ -619,7 +639,7 @@ func GetSearchCommand() *cobra.Command {
 			if len(result.Hashtags) > 0 {
 				fmt.Println("=== Hashtags ===")
 				for _, tag := range result.Hashtags {
-					fmt.Printf("#%s\n", tag)
+					fmt.Printf("#%s\n", tag.Name)
 				}
 			}
 
@@ -731,7 +751,8 @@ func GetNotificationsCommand() *cobra.Command {
 				return nil
 			}
 
-			fmt.Println("=== Notifications ===\n")
+			fmt.Println("=== Notifications ===")
+			fmt.Println()
 			for _, n := range notifications {
 				switch n.Type {
 				case "mention":
@@ -875,10 +896,13 @@ func stripHTML(s string) string {
 }
 
 func isID(s string) bool {
+	if len(s) < 5 || len(s) > 32 {
+		return false
+	}
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return false
 		}
 	}
-	return len(s) > 0
+	return true
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Config 存储 Mastodon CLI 的配置信息
 type Config struct {
 	InstanceURL  string `mapstructure:"instance_url"`
 	AccessToken  string `mapstructure:"access_token"`
@@ -16,6 +17,7 @@ type Config struct {
 
 var cfg *Config
 
+// GetConfig 获取当前配置
 func GetConfig() *Config {
 	if cfg != nil {
 		return cfg
@@ -40,6 +42,7 @@ func GetConfig() *Config {
 	return cfg
 }
 
+// SaveConfig 保存配置
 func SaveConfig(c *Config) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -63,11 +66,13 @@ func SaveConfig(c *Config) error {
 	return viper.WriteConfig()
 }
 
+// IsLoggedIn 检查是否已登录
 func IsLoggedIn() bool {
 	c := GetConfig()
 	return c.InstanceURL != "" && c.AccessToken != ""
 }
 
+// ClearConfig 清除配置
 func ClearConfig() error {
 	cfg = &Config{}
 	homeDir, err := os.UserHomeDir()
