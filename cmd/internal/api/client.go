@@ -390,3 +390,290 @@ func Logout() error {
 func GetConfig() *config.Config {
 	return config.GetConfig()
 }
+
+func (c *Client) GetHomeTimeline(limit int) ([]Status, error) {
+	endpoint := "timelines/home"
+	if limit > 0 {
+		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var statuses []Status
+	if err := json.Unmarshal(respBody, &statuses); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return statuses, nil
+}
+
+func (c *Client) GetLocalTimeline(limit int) ([]Status, error) {
+	endpoint := "timelines/public?local=true"
+	if limit > 0 {
+		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var statuses []Status
+	if err := json.Unmarshal(respBody, &statuses); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return statuses, nil
+}
+
+func (c *Client) GetFederatedTimeline(limit int) ([]Status, error) {
+	endpoint := "timelines/public"
+	if limit > 0 {
+		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var statuses []Status
+	if err := json.Unmarshal(respBody, &statuses); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return statuses, nil
+}
+
+func (c *Client) GetStatus(statusID string) (*Status, error) {
+	respBody, err := c.doRequest("GET", "statuses/"+statusID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) FavoriteStatus(statusID string) (*Status, error) {
+	respBody, err := c.doRequest("POST", "statuses/"+statusID+"/favourite", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) UnfavoriteStatus(statusID string) (*Status, error) {
+	respBody, err := c.doRequest("POST", "statuses/"+statusID+"/unfavourite", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) BoostStatus(statusID string) (*Status, error) {
+	respBody, err := c.doRequest("POST", "statuses/"+statusID+"/reblog", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) UnboostStatus(statusID string) (*Status, error) {
+	respBody, err := c.doRequest("POST", "statuses/"+statusID+"/unreblog", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) PostReply(status, inReplyToID string) (*Status, error) {
+	body := map[string]interface{}{
+		"status":      status,
+		"in_reply_to": inReplyToID,
+	}
+
+	respBody, err := c.doRequest("POST", "statuses", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var s Status
+	if err := json.Unmarshal(respBody, &s); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &s, nil
+}
+
+func (c *Client) DeleteStatus(statusID string) error {
+	_, err := c.doRequest("DELETE", "statuses/"+statusID, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type SearchResult struct {
+	Accounts []Account `json:"accounts"`
+	Statuses []Status  `json:"statuses"`
+	Hashtags []string  `json:"hashtags"`
+}
+
+func (c *Client) Search(query string, limit int) (*SearchResult, error) {
+	endpoint := "search?q=" + url.QueryEscape(query)
+	if limit > 0 {
+		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result SearchResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+type AccountFull struct {
+	ID             string  `json:"id"`
+	Username       string  `json:"username"`
+	Acct           string  `json:"acct"`
+	DisplayName    string  `json:"display_name"`
+	Note           string  `json:"note"`
+	URL            string  `json:"url"`
+	Avatar         string  `json:"avatar"`
+	AvatarStatic   string  `json:"avatar_static"`
+	Header         string  `json:"header"`
+	HeaderStatic   string  `json:"header_static"`
+	Locked         bool    `json:"locked"`
+	FollowersCount int     `json:"followers_count"`
+	FollowingCount int     `json:"following_count"`
+	StatusesCount  int     `json:"statuses_count"`
+	CreatedAt      string  `json:"created_at"`
+	Bot            bool    `json:"bot"`
+	Fields         []Field `json:"fields"`
+}
+
+type Field struct {
+	Name       string `json:"name"`
+	Value      string `json:"value"`
+	VerifiedAt string `json:"verified_at"`
+}
+
+func (c *Client) GetAccount(accountID string) (*AccountFull, error) {
+	respBody, err := c.doRequest("GET", "accounts/"+accountID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var account AccountFull
+	if err := json.Unmarshal(respBody, &account); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &account, nil
+}
+
+type Notification struct {
+	ID        string  `json:"id"`
+	Type      string  `json:"type"`
+	CreatedAt string  `json:"created_at"`
+	Account   Account `json:"account"`
+	Status    *Status `json:"status"`
+}
+
+func (c *Client) GetNotifications(limit int, notificationType string) ([]Notification, error) {
+	endpoint := "notifications"
+	if limit > 0 || notificationType != "" {
+		endpoint += "?"
+		if limit > 0 {
+			endpoint += "limit=" + fmt.Sprintf("%d", limit)
+		}
+		if notificationType != "" {
+			if limit > 0 {
+				endpoint += "&"
+			}
+			endpoint += "types=" + notificationType
+		}
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var notifications []Notification
+	if err := json.Unmarshal(respBody, &notifications); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return notifications, nil
+}
+
+func (c *Client) GetAccountFollowers(accountID string, limit int) ([]Account, error) {
+	endpoint := "accounts/" + accountID + "/followers"
+	if limit > 0 {
+		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var accounts []Account
+	if err := json.Unmarshal(respBody, &accounts); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return accounts, nil
+}
+
+func (c *Client) GetAccountFollowing(accountID string, limit int) ([]Account, error) {
+	endpoint := "accounts/" + accountID + "/following"
+	if limit > 0 {
+		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+	}
+	respBody, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var accounts []Account
+	if err := json.Unmarshal(respBody, &accounts); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return accounts, nil
+}
