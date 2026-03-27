@@ -29,7 +29,10 @@ If no instance is provided, it will be prompted interactively.`,
 			if instance == "" && !interactive {
 				fmt.Print("Enter Mastodon instance URL (e.g., mastodon.social): ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read instance URL: %w", err)
+				}
 				instance = strings.TrimSpace(input)
 			}
 
@@ -61,7 +64,10 @@ If no instance is provided, it will be prompted interactively.`,
 
 			fmt.Print("\nEnter the authorization code: ")
 			reader := bufio.NewReader(os.Stdin)
-			authCode, _ := reader.ReadString('\n')
+			authCode, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read authorization code: %w", err)
+			}
 			authCode = strings.TrimSpace(authCode)
 
 			if authCode == "" {
@@ -135,7 +141,10 @@ func GetPostCommand() *cobra.Command {
 			} else {
 				fmt.Print("Enter your status: ")
 				reader := bufio.NewReader(os.Stdin)
-				input, _ := reader.ReadString('\n')
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					return fmt.Errorf("failed to read status: %w", err)
+				}
 				status = strings.TrimSpace(input)
 			}
 
@@ -143,7 +152,7 @@ func GetPostCommand() *cobra.Command {
 				return fmt.Errorf("status cannot be empty")
 			}
 
-			s, err := client.PostStatus(status)
+			s, err := client.PostStatus(status, visibility)
 			if err != nil {
 				return fmt.Errorf("failed to post: %w", err)
 			}
@@ -501,6 +510,7 @@ func GetUnboostCommand() *cobra.Command {
 
 func GetReplyCommand() *cobra.Command {
 	var inReplyToID string
+	var visibility string
 
 	cmd := &cobra.Command{
 		Use:   "reply <status_id> <message>",
@@ -520,7 +530,7 @@ func GetReplyCommand() *cobra.Command {
 			inReplyToID = args[0]
 			status := strings.Join(args[1:], " ")
 
-			s, err := client.PostReply(status, inReplyToID)
+			s, err := client.PostReply(status, inReplyToID, visibility)
 			if err != nil {
 				return fmt.Errorf("failed to post reply: %w", err)
 			}
@@ -530,6 +540,8 @@ func GetReplyCommand() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&visibility, "visibility", "v", "public", "Reply visibility (public, unlisted, private, direct)")
 
 	return cmd
 }
@@ -655,8 +667,12 @@ func GetAccountCommand() *cobra.Command {
 
 			if isID(usernameOrID) {
 				account, err = client.GetAccount(usernameOrID)
+				if err != nil {
+					return fmt.Errorf("failed to get account: %w", err)
+				}
 			} else {
-				acc, err := client.GetAccountByUsername(usernameOrID)
+				var acc *api.Account
+				acc, err = client.GetAccountByUsername(usernameOrID)
 				if err != nil {
 					return fmt.Errorf("failed to find user: %w", err)
 				}
@@ -664,10 +680,6 @@ func GetAccountCommand() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("failed to get account info: %w", err)
 				}
-			}
-
-			if err != nil {
-				return fmt.Errorf("failed to get account: %w", err)
 			}
 
 			fmt.Printf("Username: @%s\n", account.Username)
@@ -875,10 +887,13 @@ func stripHTML(s string) string {
 }
 
 func isID(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
 	for _, c := range s {
-		if c < '0' || c > '9' {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
 			return false
 		}
 	}
-	return len(s) > 0
+	return true
 }
