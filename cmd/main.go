@@ -15,6 +15,15 @@ func main() {
 		Use:   "mastodon-cli",
 		Short: "Mastodon CLI - A command-line interface for Mastodon",
 		Long:  `A command-line tool to interact with Mastodon social network. Supports posting, following, and more.`,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if cmd.Name() != "login" && cmd.Name() != "help" {
+				cfg := api.GetConfig()
+				if cfg.InstanceURL != "" && cfg.AccessToken == "" {
+					fmt.Println("Warning: Configuration incomplete. Please run login again.")
+					os.Exit(1)
+				}
+			}
+		},
 	}
 
 	rootCmd.AddCommand(commands.GetLoginCommand())
@@ -40,10 +49,5 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-
-	cfg := api.GetConfig()
-	if cfg.InstanceURL != "" && cfg.AccessToken == "" {
-		fmt.Println("Warning: Logged in but no access token. Please run login again.")
 	}
 }

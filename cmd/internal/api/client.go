@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"mastodon-cli/cmd/internal/config"
@@ -40,13 +41,17 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 		baseURL = "https://" + baseURL
 	}
 
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid instance URL: %w", err)
-	}
+	// 确保 baseURL 没有尾部斜杠
+	baseURL = strings.TrimSuffix(baseURL, "/")
 
-	parsedURL.Path = "/api/v1/" + endpoint
-	apiURL := parsedURL.String()
+	var apiURL string
+	// 如果 endpoint 以 /api/ 开头，则使用完整路径（用于跨版本API调用）
+	if strings.HasPrefix(endpoint, "/api/") {
+		apiURL = baseURL + endpoint
+	} else {
+		// 默认使用 /api/v1/ 前缀
+		apiURL = baseURL + "/api/v1/" + endpoint
+	}
 
 	var reqBody io.Reader
 	if body != nil {
@@ -63,6 +68,7 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	if c.accessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	}
@@ -79,6 +85,14 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 如果返回的是HTML，提供更友好的错误信息
+		if strings.Contains(string(respBody), "<!DOCTYPE html>") || strings.Contains(string(respBody), "<html") {
+			return nil, fmt.Errorf("API request failed with status %d: Server returned HTML instead of JSON. This may indicate:\n"+
+				"  - The instance URL is incorrect (currently using: %s)\n"+
+				"  - The API endpoint is not supported on this instance\n"+
+				"  - The instance may require authentication for this endpoint",
+				resp.StatusCode, baseURL)
+		}
 		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -86,7 +100,16 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 }
 
 func hasScheme(url string) bool {
-	return len(url) >= 7 && (url[:7] == "http://" || url[:8] == "https://")
+	if len(url) < 7 {
+		return false
+	}
+	if url[:7] == "http://" {
+		return true
+	}
+	if len(url) >= 8 && url[:8] == "https://" {
+		return true
+	}
+	return false
 }
 
 type AppRegistration struct {
@@ -245,9 +268,13 @@ type Relationship struct {
 	FollowedBy bool   `json:"followed_by"`
 }
 
-func (c *Client) PostStatus(status string) (*Status, error) {
+func (c *Client) PostStatus(status string, visibility string) (*Status, error) {
 	body := map[string]interface{}{
 		"status": status,
+	}
+
+	if visibility != "" {
+		body["visibility"] = visibility
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -264,9 +291,27 @@ func (c *Client) PostStatus(status string) (*Status, error) {
 }
 
 func (c *Client) GetAccountByUsername(username string) (*Account, error) {
-	respBody, err := c.doRequest("GET", "accounts/lookup?acct="+url.QueryEscape(username), nil)
+	// 首先尝试使用 accounts/lookup 端点
+	endpoint := "accounts/lookup?acct=" + url.QueryEscape(username)
+	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		// 如果 lookup 失败，尝试搜索端点作为备选
+		searchEndpoint := "accounts/search?q=" + url.QueryEscape(username) + "&limit=1&resolve=true"
+		searchRespBody, searchErr := c.doRequest("GET", searchEndpoint, nil)
+		if searchErr != nil {
+			return nil, fmt.Errorf("failed to find user (lookup: %w, search: %w)", err, searchErr)
+		}
+
+		var accounts []Account
+		if jsonErr := json.Unmarshal(searchRespBody, &accounts); jsonErr != nil {
+			return nil, fmt.Errorf("failed to parse search response: %w", jsonErr)
+		}
+
+		if len(accounts) == 0 {
+			return nil, fmt.Errorf("no user found with username: %s", username)
+		}
+
+		return &accounts[0], nil
 	}
 
 	var account Account
@@ -326,47 +371,9 @@ type TokenResponse struct {
 	CreatedAt   int    `json:"created_at"`
 }
 
+// Login 已弃用，请使用 GetAccessToken 代替
 func Login(instanceURL, clientID, clientSecret, authCode string) (string, error) {
-	baseURL := instanceURL
-	if !hasScheme(baseURL) {
-		baseURL = "https://" + baseURL
-	}
-
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid instance URL: %w", err)
-	}
-	parsedURL.Path = "/oauth/token"
-
-	data := url.Values{}
-	data.Set("client_id", clientID)
-	data.Set("client_secret", clientSecret)
-	data.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
-	data.Set("grant_type", "authorization_code")
-	data.Set("code", authCode)
-	data.Set("scope", "read write follow push")
-
-	resp, err := http.PostForm(parsedURL.String(), data)
-	if err != nil {
-		return "", fmt.Errorf("failed to get access token: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("failed to get access token: status %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var result TokenResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.AccessToken, nil
+	return GetAccessToken(instanceURL, clientID, clientSecret, authCode)
 }
 
 func SaveLogin(instanceURL, accessToken, clientID, clientSecret string) error {
@@ -393,8 +400,12 @@ func GetConfig() *config.Config {
 
 func (c *Client) GetHomeTimeline(limit int) ([]Status, error) {
 	endpoint := "timelines/home"
+	query := url.Values{}
 	if limit > 0 {
-		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -410,10 +421,13 @@ func (c *Client) GetHomeTimeline(limit int) ([]Status, error) {
 }
 
 func (c *Client) GetLocalTimeline(limit int) ([]Status, error) {
-	endpoint := "timelines/public?local=true"
+	endpoint := "timelines/public"
+	query := url.Values{}
+	query.Set("local", "true")
 	if limit > 0 {
-		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
 	}
+	endpoint += "?" + query.Encode()
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -429,8 +443,12 @@ func (c *Client) GetLocalTimeline(limit int) ([]Status, error) {
 
 func (c *Client) GetFederatedTimeline(limit int) ([]Status, error) {
 	endpoint := "timelines/public"
+	query := url.Values{}
 	if limit > 0 {
-		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -487,6 +505,16 @@ func (c *Client) UnfavoriteStatus(statusID string) (*Status, error) {
 	return &s, nil
 }
 
+// FavouriteStatus 是 FavoriteStatus 的别名，保持英式拼写的兼容性
+func (c *Client) FavouriteStatus(statusID string) (*Status, error) {
+	return c.FavoriteStatus(statusID)
+}
+
+// UnfavouriteStatus 是 UnfavoriteStatus 的别名，保持英式拼写的兼容性
+func (c *Client) UnfavouriteStatus(statusID string) (*Status, error) {
+	return c.UnfavoriteStatus(statusID)
+}
+
 func (c *Client) BoostStatus(statusID string) (*Status, error) {
 	respBody, err := c.doRequest("POST", "statuses/"+statusID+"/reblog", nil)
 	if err != nil {
@@ -515,10 +543,14 @@ func (c *Client) UnboostStatus(statusID string) (*Status, error) {
 	return &s, nil
 }
 
-func (c *Client) PostReply(status, inReplyToID string) (*Status, error) {
+func (c *Client) PostReply(status, inReplyToID, visibility string) (*Status, error) {
 	body := map[string]interface{}{
 		"status":      status,
 		"in_reply_to": inReplyToID,
+	}
+
+	if visibility != "" {
+		body["visibility"] = visibility
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -543,20 +575,36 @@ func (c *Client) DeleteStatus(statusID string) error {
 	return nil
 }
 
+type Tag struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
 type SearchResult struct {
 	Accounts []Account `json:"accounts"`
 	Statuses []Status  `json:"statuses"`
-	Hashtags []string  `json:"hashtags"`
+	Hashtags []Tag     `json:"hashtags"`
 }
 
 func (c *Client) Search(query string, limit int) (*SearchResult, error) {
-	endpoint := "search?q=" + url.QueryEscape(query)
+	queryParams := url.Values{}
+	queryParams.Set("q", query)
+	queryParams.Set("resolve", "true")
 	if limit > 0 {
-		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
+		queryParams.Set("limit", fmt.Sprintf("%d", limit))
 	}
+	queryString := "?" + queryParams.Encode()
+
+	// 首先尝试 v2 搜索端点
+	endpoint := "/api/v2/search" + queryString
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		// 回退到 v1 搜索端点
+		endpoint = "search" + queryString
+		respBody, err = c.doRequest("GET", endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var result SearchResult
@@ -617,17 +665,15 @@ type Notification struct {
 
 func (c *Client) GetNotifications(limit int, notificationType string) ([]Notification, error) {
 	endpoint := "notifications"
-	if limit > 0 || notificationType != "" {
-		endpoint += "?"
-		if limit > 0 {
-			endpoint += "limit=" + fmt.Sprintf("%d", limit)
-		}
-		if notificationType != "" {
-			if limit > 0 {
-				endpoint += "&"
-			}
-			endpoint += "types=" + notificationType
-		}
+	query := url.Values{}
+	if limit > 0 {
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if notificationType != "" {
+		query.Set("types", notificationType)
+	}
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -644,8 +690,12 @@ func (c *Client) GetNotifications(limit int, notificationType string) ([]Notific
 
 func (c *Client) GetAccountFollowers(accountID string, limit int) ([]Account, error) {
 	endpoint := "accounts/" + accountID + "/followers"
+	query := url.Values{}
 	if limit > 0 {
-		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -662,8 +712,12 @@ func (c *Client) GetAccountFollowers(accountID string, limit int) ([]Account, er
 
 func (c *Client) GetAccountFollowing(accountID string, limit int) ([]Account, error) {
 	endpoint := "accounts/" + accountID + "/following"
+	query := url.Values{}
 	if limit > 0 {
-		endpoint += "?limit=" + fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
