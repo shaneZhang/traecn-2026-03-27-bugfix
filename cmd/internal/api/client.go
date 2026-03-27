@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"mastodon-cli/cmd/internal/config"
@@ -35,6 +36,10 @@ func (c *Client) SetAccessToken(accessToken string) {
 }
 
 func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
+	return c.doRequestWithVersion(method, endpoint, body, "v1")
+}
+
+func (c *Client) doRequestWithVersion(method, endpoint string, body interface{}, version string) ([]byte, error) {
 	baseURL := c.instanceURL
 	if !hasScheme(baseURL) {
 		baseURL = "https://" + baseURL
@@ -45,7 +50,16 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 		return nil, fmt.Errorf("invalid instance URL: %w", err)
 	}
 
-	parsedURL.Path = "/api/v1/" + endpoint
+	if parsedURL.Host == "" {
+		parsedURL.Host = parsedURL.Path
+		parsedURL.Path = ""
+	}
+
+	pathParts := strings.SplitN(endpoint, "?", 2)
+	parsedURL.Path = "/api/" + version + "/" + pathParts[0]
+	if len(pathParts) > 1 {
+		parsedURL.RawQuery = pathParts[1]
+	}
 	apiURL := parsedURL.String()
 
 	var reqBody io.Reader
@@ -85,8 +99,8 @@ func (c *Client) doRequest(method, endpoint string, body interface{}) ([]byte, e
 	return respBody, nil
 }
 
-func hasScheme(url string) bool {
-	return len(url) >= 7 && (url[:7] == "http://" || url[:8] == "https://")
+func hasScheme(urlStr string) bool {
+	return len(urlStr) >= 7 && (urlStr[:7] == "http://" || (len(urlStr) >= 8 && urlStr[:8] == "https://"))
 }
 
 type AppRegistration struct {
@@ -245,9 +259,10 @@ type Relationship struct {
 	FollowedBy bool   `json:"followed_by"`
 }
 
-func (c *Client) PostStatus(status string) (*Status, error) {
+func (c *Client) PostStatus(status, visibility string) (*Status, error) {
 	body := map[string]interface{}{
-		"status": status,
+		"status":     status,
+		"visibility": visibility,
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -264,9 +279,19 @@ func (c *Client) PostStatus(status string) (*Status, error) {
 }
 
 func (c *Client) GetAccountByUsername(username string) (*Account, error) {
-	respBody, err := c.doRequest("GET", "accounts/lookup?acct="+url.QueryEscape(username), nil)
+	endpoint := "accounts/lookup?acct=" + url.QueryEscape(username)
+	respBody, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		searchResult, searchErr := c.Search(username, 1)
+		if searchErr != nil {
+			return nil, fmt.Errorf("failed to find user '%s': %w (search also failed: %w)", username, err, searchErr)
+		}
+
+		if len(searchResult.Accounts) == 0 {
+			return nil, fmt.Errorf("user not found: %s", username)
+		}
+
+		return &searchResult.Accounts[0], nil
 	}
 
 	var account Account
@@ -515,10 +540,11 @@ func (c *Client) UnboostStatus(statusID string) (*Status, error) {
 	return &s, nil
 }
 
-func (c *Client) PostReply(status, inReplyToID string) (*Status, error) {
+func (c *Client) PostReply(status, inReplyToID, visibility string) (*Status, error) {
 	body := map[string]interface{}{
-		"status":      status,
-		"in_reply_to": inReplyToID,
+		"status":         status,
+		"in_reply_to_id": inReplyToID,
+		"visibility":     visibility,
 	}
 
 	respBody, err := c.doRequest("POST", "statuses", body)
@@ -550,13 +576,16 @@ type SearchResult struct {
 }
 
 func (c *Client) Search(query string, limit int) (*SearchResult, error) {
-	endpoint := "search?q=" + url.QueryEscape(query)
+	endpoint := "search?q=" + url.QueryEscape(query) + "&type=accounts,statuses,hashtags"
 	if limit > 0 {
 		endpoint += "&limit=" + fmt.Sprintf("%d", limit)
 	}
-	respBody, err := c.doRequest("GET", endpoint, nil)
+	respBody, err := c.doRequestWithVersion("GET", endpoint, nil, "v2")
 	if err != nil {
-		return nil, err
+		respBody, err = c.doRequest("GET", endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var result SearchResult
